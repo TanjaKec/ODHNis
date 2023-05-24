@@ -1,0 +1,162 @@
+---
+title: "Open Data - Discovering Opportunities"
+author: "Sister Analyst"
+date: "24/05/2023"
+output: 
+  html_document:
+    theme: "yeti"
+    toc: true
+    toc_float: true
+    df_print: kable
+---
+
+```{r setup, include=FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = T,
+                      include=TRUE,
+                      prompt = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.height = 5,
+                      fig.width = 7,
+                      cache = FALSE)
+```
+
+## Introduction
+
+We will create a data analysis report about air pollution in Nis with the explanation of the R code used. Data that will be used for the analysis comes from the stations, which are set up by an independent initiative [Vazduh Gradjanima](https://vazduhgradjanima.rs) 
+
+Data is not frilly available with a single click, and we need to do some investigation. From the map <https://maps.sensor.community/#9/43.4655/21.3952> we can identify the klimerko stations in Nis and download their readings from <https://archive.sensor.community/2023-05-22/>. The readings are then combined into a single csv file 'data_nis.csv' that is made available from our GitHub. 
+
+Once we have downloaded our data, we will start our workshop by installing [R](https://r-project.org) and [RStudio](https://www.rstudio.com), by following the instructions available on this link: [Install R i RStudia](https://instalirajr.netlify.app).
+
+To learn how to use [R](https://cran.r-project.org/) and develop a report like this visit [Data Challenge Platform](https://datachallengewithr.rbind.io) with learning material developed in partnership with [UNDP Serbia](http://www.rs.undp.org). In particular we will focus on matirijal [Day 1](https://datachallengewithr.rbind.io/day1/) and [Day 2](https://datachallengewithr.rbind.io/day2/).
+
+After we get familiar with the basic R syntax and data wrangling using data available from the open data portal Republic of Serbia https://data.gov.rs/sr/, we can dig into the air pollution data set following the instructions given below.  
+
+## Air pollution case study
+
+### Reading and organising data
+
+We will start the analysis by uploading the necessary packages and data into R.
+
+If you have not got the packages used in the following code, you will need to uncomment the first few lines (delete the `#` symbol) in the code below.
+
+```{r}
+#install.packages("rmarkdown")
+#install.packages("leaflet")
+#install.packages("lubridate")
+#install.packages("dplyr")
+#install.packages("tidyverse")
+#install.packages("DT")
+
+library(leaflet)
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyverse))
+
+mydata <- read.csv('data/data_nis.csv', 
+                   header=T) 
+```
+
+It is always a good idea to have a look at data you upload, before you start using it for your analysis.
+```{r}
+# scan data
+glimpse(mydata)
+```
+
+We can do some tweaking, by removing a few variables and separating day from time and creating separate columns for latitude and longitude variables.
+```{r}
+# separate date from time
+mydata <- separate(mydata, timestamp, c("date", "time"), sep = "T")
+## remove the last character from the `time` variable
+mydata$time <- (str_sub(mydata$time, end = -1))
+# scan data
+glimpse(mydata)
+## remove 2nd and the last column
+mydata <- mydata[, -c(2, 3)]
+```
+
+We will check how many unique records each variable in our data has.
+```{r}
+(uniq <- unlist(lapply(mydata, function(x) length(unique(x)))))
+```
+
+To us it is most interesting to notice that we have `10` stations in total. Next, we'll check if all of the stations are active, by examining the number of readings for each station.
+
+```{r}
+# how many reading each station makes
+mydata %>%
+  group_by(sensor_id) %>%
+  summarise(no_readings = n()) %>%
+  arrange(no_readings) %>% 
+  DT::datatable()
+```
+
+There are all active and are providing the reading. 
+
+### Mapping the stations
+
+To see where the stations are allocated we will plot them on Google maps. We will use the `leaflet` package to do this and create a sub data with only a list of the stations and their positions.
+
+```{r}
+mydata[,1] <- as.factor(mydata[,1])
+summary(mydata)
+# creating a dataframe with only names and lat & lng for each station
+stations <- data.frame(mydata[,c(1:3)]) %>% 
+  drop_na()
+stations [, 2] <- as.numeric(as.character(stations[,2]))
+stations [, 3] <- as.numeric(as.character(stations[,3]))
+summary(stations)
+```
+
+Once we have the subset data we can plot it using the `leaflet` package as below.
+
+```{r}
+minlat <- min(stations$lat)
+maxlat <- max(stations$lat)
+minlng <- min(stations$lon)
+maxlng <- max(stations$lon)
+
+stations %>% 
+  group_by(sensor_id, lat, lon) %>% 
+  leaflet() %>% 
+  addTiles() %>%
+  fitBounds(~minlng, ~minlat, ~maxlng, ~maxlat) %>% 
+  addCircles(lng = ~lon, lat = ~lat,
+             radius = 150, weight = 5, color = "black",
+             fillColor = "red", fillOpacity = 0.7,  
+             popup = ~paste("<b>", sensor_id)
+  ) 
+```
+
+### Analysing the readings
+
+In this section we will look through the readings and try to make some sense of it all.
+If you are not familiar with the information collected by the stations, ie. about the pm particles you can check the following link:  <https://www.irceline.be/en/documentation/faq/what-is-pm10-and-pm2.5>.
+
+
+#### Average concentration of particles each hour
+```{r}
+mydata$time <- factor(mydata$time)
+mydata$time <- hms(as.character(mydata$time))
+
+mydata %>% 
+  group_by(hour(time)) %>% 
+  summarise(no_readings = n()) %>% 
+  DT::datatable()
+
+mydata%>% 
+  group_by(hour(time)) %>%
+  summarise(mean_P1 = mean(P1, na.rm = TRUE), mean_P2 = mean(P2, na.rm = TRUE)) %>% 
+  gather("pm_no", "mean_pm", -`hour(time)`, factor_key = TRUE) %>% 
+  ggplot(aes(x = `hour(time)`, y = mean_pm, fill = pm_no )) +
+  geom_bar(stat="identity", position = "dodge", color = "black") +
+  coord_flip() +
+  theme(plot.title = element_text(size = 14, vjust = 2, hjust=0.5)) +
+  labs (title = "average value of P1 and P2 per hour", 
+        caption = "Data from: https://vazduhgradjanima.rs", 
+        x = "month", y = "average pm") +
+  scale_fill_brewer(palette="Paired") + 
+  theme(legend.position="bottom") 
+```
+
